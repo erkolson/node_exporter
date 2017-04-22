@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"os/exec"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
@@ -192,7 +193,14 @@ func (c *diskstatsCollector) Update(ch chan<- prometheus.Metric) error {
 }
 
 func getDiskStats() (map[string]map[int]string, error) {
-	file, err := os.Open(procFilePath("diskstats"))
+	log.Info("Using nsenter")
+	cmd := "nsenter -t 1 -m cat /proc/diskstats > /tmp/node_exporter_diskstats"
+
+	_, err := exec.Command("bash", "-c", cmd).Output()
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open("/tmp/node_exporter_diskstats")
 	if err != nil {
 		return nil, err
 	}

@@ -16,12 +16,10 @@
 package collector
 
 import (
-	"bufio"
-	"os"
-	"strings"
-	"syscall"
-
 	"github.com/prometheus/common/log"
+	"os/exec"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -32,6 +30,8 @@ const (
 
 // GetStats returns filesystem stats.
 func (c *filesystemCollector) GetStats() ([]filesystemStats, error) {
+	log.Infof("Applatix Volume Collector!")
+
 	mps, err := mountPointDetails()
 	if err != nil {
 		return nil, err
@@ -47,51 +47,73 @@ func (c *filesystemCollector) GetStats() ([]filesystemStats, error) {
 			continue
 		}
 
-		buf := new(syscall.Statfs_t)
-		err := syscall.Statfs(labels.mountPoint, buf)
+		cmd := "nsenter"
+		args := []string{"-t", "1", "-m", "df", "-T", "-B", "1", labels.mountPoint}
+		cmdOut, err := exec.Command(cmd, args...).Output()
+
 		if err != nil {
 			stats = append(stats, filesystemStats{
 				labels:      labels,
 				deviceError: 1,
 			})
-			log.Errorf("Error on statfs() system call for %q: %s", labels.mountPoint, err)
+			log.Errorf("Error on nsenter df call for %q: %s", labels.mountPoint, err)
 			continue
 		}
 
-		var ro float64
-		if (buf.Flags & readOnly) != 0 {
-			ro = 1
-		}
+		outputs := strings.Split(string(cmdOut), "\n")
 
-		stats = append(stats, filesystemStats{
-			labels:    labels,
-			size:      float64(buf.Blocks) * float64(buf.Bsize),
-			free:      float64(buf.Bfree) * float64(buf.Bsize),
-			avail:     float64(buf.Bavail) * float64(buf.Bsize),
-			files:     float64(buf.Files),
-			filesFree: float64(buf.Ffree),
-			ro:        ro,
-		})
+		if len(outputs) > 1 {
+			results := strings.Fields(outputs[1])
+			if len(results) > 4 {
+				size_res, err1 := strconv.ParseFloat(string(results[2]), 64)
+				free_res, err2 := strconv.ParseFloat(string(results[4]), 64)
+				avail_res, err3 := strconv.ParseFloat(string(results[3]), 64)
+
+				if err1 != nil || err2 != nil || err3 != nil {
+					stats = append(stats, filesystemStats{
+						labels:      labels,
+						deviceError: 1,
+					})
+					log.Errorf("Error on parseFloat.")
+					continue
+				}
+				stats = append(stats, filesystemStats{
+					labels:    labels,
+					size:      float64(size_res),
+					free:      float64(free_res),
+					avail:     float64(avail_res),
+					files:     float64(0),
+					filesFree: float64(0),
+					ro:        0,
+				})
+				log.Infof(outputs[1])
+			}
+		}
 	}
 	return stats, nil
 }
 
 func mountPointDetails() ([]filesystemLabels, error) {
-	file, err := os.Open(procFilePath("mounts"))
+	filesystems := []filesystemLabels{}
+	cmd := "nsenter"
+	args := []string{"-t", "1", "-m", "cat", "/proc/mounts"}
+	cmdOut, err := exec.Command(cmd, args...).Output()
+
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 
-	filesystems := []filesystemLabels{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		parts := strings.Fields(scanner.Text())
-		filesystems = append(filesystems, filesystemLabels{
-			device:     parts[0],
-			mountPoint: parts[1],
-			fsType:     parts[2],
-		})
+	outputs := strings.Split(string(cmdOut), "\n")
+	for _, output := range outputs {
+		results := strings.Fields(output)
+		if len(results) > 3 {
+			filesystem := filesystemLabels{
+				device:     string(results[0]),
+				mountPoint: string(results[1]),
+				fsType:     string(results[2]),
+			}
+			filesystems = append(filesystems, filesystem)
+		}
 	}
-	return filesystems, scanner.Err()
+	return filesystems, nil
 }

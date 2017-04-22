@@ -1,5 +1,4 @@
-FROM        quay.io/prometheus/busybox:glibc
-MAINTAINER  The Prometheus Authors <prometheus-developers@googlegroups.com>
+FROM        jpetazzo/nsenter
 
 COPY node_exporter /bin/node_exporter
 
